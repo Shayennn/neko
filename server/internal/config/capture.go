@@ -235,6 +235,11 @@ func (Capture) InitV2(cmd *cobra.Command) error {
 		return err
 	}
 
+	cmd.PersistentFlags().Int("video_max_bitrate", 0, "V2: maximum video bitrate in kbit/s")
+	if err := viper.BindPFlag("video_max_bitrate", cmd.PersistentFlags().Lookup("video_max_bitrate")); err != nil {
+		return err
+	}
+
 	cmd.PersistentFlags().Int("max_fps", 0, "V2: maximum fps delivered via WebRTC, 0 is for no maximum")
 	if err := viper.BindPFlag("max_fps", cmd.PersistentFlags().Lookup("max_fps")); err != nil {
 		return err
@@ -500,12 +505,37 @@ func (s *Capture) SetV2() {
 	}
 
 	videoBitrate := viper.GetUint("video_bitrate")
+	videoMaxBitrate := viper.GetUint("video_max_bitrate")
 	videoMaxFPS := int16(viper.GetInt("max_fps"))
 	videoPipeline := viper.GetString("video")
 
+	if videoBitrate != 0 && videoMaxBitrate != 0 && videoMaxBitrate < videoBitrate {
+		log.Warn().
+			Uint("video_bitrate", videoBitrate).
+			Uint("video_max_bitrate", videoMaxBitrate).
+			Msg("video_max_bitrate is lower than video_bitrate")
+	}
+	if videoMaxBitrate != 0 && s.VideoCodec.Name != codec.H264().Name {
+		log.Warn().
+			Str("video_codec", s.VideoCodec.Name).
+			Msg("video_max_bitrate only applies to h264 in legacy pipeline generation")
+	}
+	if videoMaxBitrate != 0 && (videoHWEnc == HwEncVAAPI || videoHWEnc == HwEncNVENC) {
+		videoHWEncName := "unknown"
+		if videoHWEnc == HwEncVAAPI {
+			videoHWEncName = "vaapi"
+		} else if videoHWEnc == HwEncNVENC {
+			videoHWEncName = "nvenc"
+		}
+
+		log.Warn().
+			Str("hwenc", videoHWEncName).
+			Msg("video_max_bitrate is ignored for selected h264 hardware encoder in legacy pipeline generation")
+	}
+
 	// video pipeline
-	if modifiedVideoCodec || videoHWEnc != HwEncUnset || videoBitrate != 0 || videoMaxFPS != 0 || videoPipeline != "" {
-		pipeline, err := NewVideoPipeline(s.VideoCodec, s.Display, videoPipeline, videoMaxFPS, videoBitrate, videoHWEnc)
+	if modifiedVideoCodec || videoHWEnc != HwEncUnset || videoBitrate != 0 || videoMaxBitrate != 0 || videoMaxFPS != 0 || videoPipeline != "" {
+		pipeline, err := NewVideoPipeline(s.VideoCodec, s.Display, videoPipeline, videoMaxFPS, videoBitrate, videoMaxBitrate, videoHWEnc)
 		if err != nil {
 			log.Warn().Err(err).Msg("unable to create video pipeline, using default")
 		} else {
@@ -526,7 +556,7 @@ func (s *Capture) SetV2() {
 			log.Warn().Msg("you are using v2 configuration 'NEKO_VIDEO' which is deprecated, please use 'NEKO_CAPTURE_VIDEO_PIPELINE' instead")
 		}
 
-		// TODO: add deprecated warning and proper alternative for HW enc, bitrate and max fps
+		// TODO: add deprecated warning and proper alternative for HW enc, bitrate, max bitrate and max fps
 		enableLegacy = true
 	}
 

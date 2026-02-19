@@ -35,6 +35,10 @@ const (
 	audioSrc = "pulsesrc device=%s ! audio/x-raw,channels=2 ! audioconvert ! "
 )
 
+var (
+	checkPlugins = gst.CheckPlugins
+)
+
 func NewBroadcastPipeline(device string, display string, pipelineSrc string, url string) string {
 	video := fmt.Sprintf(videoSrc, display, 25)
 	audio := fmt.Sprintf(audioSrc, device)
@@ -59,7 +63,15 @@ func NewBroadcastPipeline(device string, display string, pipelineSrc string, url
 	return pipelineStr
 }
 
-func NewVideoPipeline(rtpCodec codec.RTPCodec, display string, pipelineSrc string, fps int16, bitrate uint, hwenc HwEnc) (string, error) {
+func openh264MaxBitrate(bitrate uint, maxBitrate uint) uint {
+	if maxBitrate > 0 {
+		return maxBitrate * 1000
+	}
+
+	return (bitrate + 1024) * 1000
+}
+
+func NewVideoPipeline(rtpCodec codec.RTPCodec, display string, pipelineSrc string, fps int16, bitrate uint, maxBitrate uint, hwenc HwEnc) (string, error) {
 	pipelineStr := " ! appsink name=appsink"
 
 	// if using custom pipeline
@@ -76,7 +88,7 @@ func NewVideoPipeline(rtpCodec codec.RTPCodec, display string, pipelineSrc strin
 	switch rtpCodec.Name {
 	case codec.VP8().Name:
 		if hwenc == HwEncVAAPI {
-			if err := gst.CheckPlugins([]string{"ximagesrc", "vaapi"}); err != nil {
+			if err := checkPlugins([]string{"ximagesrc", "vaapi"}); err != nil {
 				return "", err
 			}
 			// vp8 encode is missing from gstreamer.freedesktop.org/documentation
@@ -87,7 +99,7 @@ func NewVideoPipeline(rtpCodec codec.RTPCodec, display string, pipelineSrc strin
 			// https://gstreamer.freedesktop.org/documentation/vpx/vp8enc.html?gi-language=c
 			// gstreamer1.0-plugins-good
 			// vp8enc error-resilient=partitions keyframe-max-dist=10 auto-alt-ref=true cpu-used=5 deadline=1
-			if err := gst.CheckPlugins([]string{"ximagesrc", "vpx"}); err != nil {
+			if err := checkPlugins([]string{"ximagesrc", "vpx"}); err != nil {
 				return "", err
 			}
 
@@ -96,7 +108,7 @@ func NewVideoPipeline(rtpCodec codec.RTPCodec, display string, pipelineSrc strin
 				"vp8enc",
 				fmt.Sprintf("target-bitrate=%d", bitrate*650),
 				"cpu-used=4",
-				"end-usage=cbr",
+				"end-usage=vbr",
 				"threads=4",
 				"deadline=1",
 				"undershoot=95",
@@ -113,17 +125,17 @@ func NewVideoPipeline(rtpCodec codec.RTPCodec, display string, pipelineSrc strin
 		// https://gstreamer.freedesktop.org/documentation/vpx/vp9enc.html?gi-language=c
 		// gstreamer1.0-plugins-good
 		// vp9enc
-		if err := gst.CheckPlugins([]string{"ximagesrc", "vpx"}); err != nil {
+		if err := checkPlugins([]string{"ximagesrc", "vpx"}); err != nil {
 			return "", err
 		}
 
-		pipelineStr = fmt.Sprintf(videoSrc+"vp9enc target-bitrate=%d cpu-used=-5 threads=4 deadline=1 keyframe-max-dist=30 auto-alt-ref=true"+pipelineStr, display, fps, bitrate*1000)
+		pipelineStr = fmt.Sprintf(videoSrc+"vp9enc target-bitrate=%d end-usage=vbr cpu-used=-5 threads=4 deadline=1 keyframe-max-dist=30 auto-alt-ref=true"+pipelineStr, display, fps, bitrate*1000)
 	case codec.AV1().Name:
 		// https://gstreamer.freedesktop.org/documentation/aom/av1enc.html?gi-language=c
 		// gstreamer1.0-plugins-bad
 		// av1enc usage-profile=1
 		// TODO: check for plugin.
-		if err := gst.CheckPlugins([]string{"ximagesrc", "vpx"}); err != nil {
+		if err := checkPlugins([]string{"ximagesrc", "vpx"}); err != nil {
 			return "", err
 		}
 
@@ -132,7 +144,7 @@ func NewVideoPipeline(rtpCodec codec.RTPCodec, display string, pipelineSrc strin
 			"av1enc",
 			fmt.Sprintf("target-bitrate=%d", bitrate*650),
 			"cpu-used=4",
-			"end-usage=cbr",
+			"end-usage=vbr",
 			// "usage-profile=realtime",
 			"undershoot=95",
 			"keyframe-max-dist=25",
@@ -141,7 +153,7 @@ func NewVideoPipeline(rtpCodec codec.RTPCodec, display string, pipelineSrc strin
 			pipelineStr,
 		}, " ")
 	case codec.H264().Name:
-		if err := gst.CheckPlugins([]string{"ximagesrc"}); err != nil {
+		if err := checkPlugins([]string{"ximagesrc"}); err != nil {
 			return "", err
 		}
 
@@ -151,13 +163,13 @@ func NewVideoPipeline(rtpCodec codec.RTPCodec, display string, pipelineSrc strin
 		}
 
 		if hwenc == HwEncVAAPI {
-			if err := gst.CheckPlugins([]string{"vaapi"}); err != nil {
+			if err := checkPlugins([]string{"vaapi"}); err != nil {
 				return "", err
 			}
 
 			pipelineStr = fmt.Sprintf(videoSrc+"video/x-raw,format=NV12 ! vaapih264enc rate-control=vbr bitrate=%d keyframe-period=180 quality-level=7 ! video/x-h264,stream-format=byte-stream,profile=constrained-baseline"+pipelineStr, display, fps, bitrate)
 		} else if hwenc == HwEncNVENC {
-			if err := gst.CheckPlugins([]string{"nvcodec"}); err != nil {
+			if err := checkPlugins([]string{"nvcodec"}); err != nil {
 				return "", err
 			}
 
@@ -166,19 +178,23 @@ func NewVideoPipeline(rtpCodec codec.RTPCodec, display string, pipelineSrc strin
 			// https://gstreamer.freedesktop.org/documentation/openh264/openh264enc.html?gi-language=c#openh264enc
 			// gstreamer1.0-plugins-bad
 			// openh264enc multi-thread=4 complexity=high bitrate=3072000 max-bitrate=4096000
-			if err := gst.CheckPlugins([]string{"openh264"}); err == nil {
-				pipelineStr = fmt.Sprintf(videoSrc+"openh264enc multi-thread=4 complexity=high bitrate=%d max-bitrate=%d ! video/x-h264,stream-format=byte-stream,profile=constrained-baseline"+pipelineStr, display, fps, bitrate*1000, (bitrate+1024)*1000)
+			if err := checkPlugins([]string{"openh264"}); err == nil {
+				pipelineStr = fmt.Sprintf(videoSrc+"openh264enc multi-thread=4 complexity=high bitrate=%d max-bitrate=%d ! video/x-h264,stream-format=byte-stream,profile=constrained-baseline"+pipelineStr, display, fps, bitrate*1000, openh264MaxBitrate(bitrate, maxBitrate))
 				break
 			}
 
 			// https://gstreamer.freedesktop.org/documentation/x264/index.html?gi-language=c
 			// gstreamer1.0-plugins-ugly
 			// video/x-raw,format=I420 ! x264enc bframes=0 key-int-max=60 byte-stream=true tune=zerolatency speed-preset=veryfast ! video/x-h264,stream-format=byte-stream,profile=constrained-baseline
-			if err := gst.CheckPlugins([]string{"x264"}); err != nil {
+			if err := checkPlugins([]string{"x264"}); err != nil {
 				return "", err
 			}
 
-			pipelineStr = fmt.Sprintf(videoSrc+"video/x-raw,format=NV12 ! x264enc threads=4 bitrate=%d key-int-max=60 vbv-buf-capacity=%d byte-stream=true tune=zerolatency speed-preset=veryfast ! video/x-h264,stream-format=byte-stream,profile=constrained-baseline"+pipelineStr, display, fps, bitrate, vbvbuf)
+			x264OptionString := ""
+			if maxBitrate > 0 {
+				x264OptionString = fmt.Sprintf(" option-string=vbv-maxrate=%d", maxBitrate)
+			}
+			pipelineStr = fmt.Sprintf(videoSrc+"video/x-raw,format=NV12 ! x264enc threads=4 bitrate=%d key-int-max=60 vbv-buf-capacity=%d byte-stream=true tune=zerolatency speed-preset=veryfast%s ! video/x-h264,stream-format=byte-stream,profile=constrained-baseline"+pipelineStr, display, fps, bitrate, vbvbuf, x264OptionString)
 		}
 	default:
 		return "", fmt.Errorf("unknown codec %s", rtpCodec.Name)
@@ -201,7 +217,7 @@ func NewAudioPipeline(rtpCodec codec.RTPCodec, device string, pipelineSrc string
 		// https://gstreamer.freedesktop.org/documentation/opus/opusenc.html
 		// gstreamer1.0-plugins-base
 		// opusenc
-		if err := gst.CheckPlugins([]string{"pulseaudio", "opus"}); err != nil {
+		if err := checkPlugins([]string{"pulseaudio", "opus"}); err != nil {
 			return "", err
 		}
 
@@ -210,7 +226,7 @@ func NewAudioPipeline(rtpCodec codec.RTPCodec, device string, pipelineSrc string
 		// https://gstreamer.freedesktop.org/documentation/libav/avenc_g722.html?gi-language=c
 		// gstreamer1.0-libav
 		// avenc_g722
-		if err := gst.CheckPlugins([]string{"pulseaudio", "libav"}); err != nil {
+		if err := checkPlugins([]string{"pulseaudio", "libav"}); err != nil {
 			return "", err
 		}
 
@@ -219,7 +235,7 @@ func NewAudioPipeline(rtpCodec codec.RTPCodec, device string, pipelineSrc string
 		// https://gstreamer.freedesktop.org/documentation/mulaw/mulawenc.html?gi-language=c
 		// gstreamer1.0-plugins-good
 		// audio/x-raw, rate=8000 ! mulawenc
-		if err := gst.CheckPlugins([]string{"pulseaudio", "mulaw"}); err != nil {
+		if err := checkPlugins([]string{"pulseaudio", "mulaw"}); err != nil {
 			return "", err
 		}
 
@@ -228,7 +244,7 @@ func NewAudioPipeline(rtpCodec codec.RTPCodec, device string, pipelineSrc string
 		// https://gstreamer.freedesktop.org/documentation/alaw/alawenc.html?gi-language=c
 		// gstreamer1.0-plugins-good
 		// audio/x-raw, rate=8000 ! alawenc
-		if err := gst.CheckPlugins([]string{"pulseaudio", "alaw"}); err != nil {
+		if err := checkPlugins([]string{"pulseaudio", "alaw"}); err != nil {
 			return "", err
 		}
 

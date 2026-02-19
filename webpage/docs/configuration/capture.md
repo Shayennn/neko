@@ -29,6 +29,10 @@ All video pipelines must use the same video codec (defined in the <Opt id="video
 
 The Gstreamer pipeline is started when the first client requests the video stream and is stopped after the last client disconnects.
 
+:::info V2 Compatibility
+Legacy V2 configuration flags `NEKO_VIDEO_BITRATE` and `NEKO_VIDEO_MAX_BITRATE` only affect the deprecated V2 pipeline generator. In V3 configuration, use `capture.video.pipelines` and encoder `gst_params` for bitrate/rate-control tuning.
+:::
+
 <ConfigurationTab options={configOptions} filter={[
   "capture.video.display",
   "capture.video.codec",

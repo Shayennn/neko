@@ -59,6 +59,7 @@ See the V3 configuration options for the [WebRTC Video](/docs/v3/configuration/c
 | `NEKO_VP9=true` *deprecated*          | `NEKO_CAPTURE_VIDEO_CODEC=vp9`                            |
 | `NEKO_VIDEO`                          | `NEKO_CAPTURE_VIDEO_PIPELINE`, V3 allows multiple video pipelines |
 | `NEKO_VIDEO_BITRATE`                  | **removed**, use [custom pipeline](/docs/v3/configuration/capture#video.gst_pipeline) instead |
+| `NEKO_VIDEO_MAX_BITRATE`              | **removed**, use [custom pipeline](/docs/v3/configuration/capture#video.gst_pipeline) instead |
 | `NEKO_HWENC`                          | **removed**, use [custom pipeline](/docs/v3/configuration/capture#video.gst_pipeline) instead |
 | `NEKO_MAX_FPS`                        | **removed**, use [custom pipeline](/docs/v3/configuration/capture#video.gst_pipeline) instead |
 
